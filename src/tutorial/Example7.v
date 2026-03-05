@@ -7,9 +7,9 @@ From Coq Require Import Logic.Eqdep.
 
 Set Implicit Arguments.
 
-(** Example 7: Cross-STS version of Example 6.
+(** Example 7: Cross-STS version of Example 5.
     Infinite simulation with coinduction, where source uses Imp STS
-    and target uses ITree STS. Uses the combined X_STS from Example5. *)
+    and target uses ITree STS. Uses the combined X_STS from Example6. *)
 
 (** ** Combined STS *)
 
