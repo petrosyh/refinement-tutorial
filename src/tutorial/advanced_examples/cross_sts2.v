@@ -1,15 +1,15 @@
 From Tutorial Require Import sflib.
 From Paco Require Import paco.
 From Tutorial Require Import Refinement ITreeLib.
-From Coq Require Import Strings.String List.
+From Stdlib Require Import Strings.String List.
 From Tutorial Require Import Imp ITreeLang Simulation.
-From Coq Require Import Logic.Eqdep.
+From Stdlib Require Import Logic.Eqdep.
 
 Set Implicit Arguments.
 
-(** Example 7: Cross-STS version of Example 5.
+(** Cross-STS Simulation 2: Imp source ↔ ITree target (coinductive simulation).
     Infinite simulation with coinduction, where source uses Imp STS
-    and target uses ITree STS. Uses the combined X_STS from Example6. *)
+    and target uses ITree STS. Extends cross_sts1 with coinductive reasoning. *)
 
 (** ** Combined STS *)
 

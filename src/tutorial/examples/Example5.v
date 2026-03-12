@@ -1,9 +1,9 @@
 From Tutorial Require Import sflib.
 From Paco Require Import paco.
 From Tutorial Require Import Refinement ITreeLib.
-From Coq Require Import Strings.String List.
+From Stdlib Require Import Strings.String List.
 From Tutorial Require Import Imp ITreeLang Simulation.
-From Coq Require Import Logic.Eqdep.
+From Stdlib Require Import Logic.Eqdep.
 
 Set Implicit Arguments.
 

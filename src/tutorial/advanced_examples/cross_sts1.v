@@ -1,13 +1,13 @@
 From Tutorial Require Import sflib.
 From Paco Require Import paco.
 From Tutorial Require Import Refinement ITreeLib.
-From Coq Require Import Strings.String List.
+From Stdlib Require Import Strings.String List.
 From Tutorial Require Import Imp ITreeLang FiniteSimulation.
-From Coq Require Import Logic.Eqdep.
+From Stdlib Require Import Logic.Eqdep.
 
 Set Implicit Arguments.
 
-(** Example 6: Cross-STS Simulation (Imp source ↔ ITree target).
+(** Cross-STS Simulation 1: Imp source ↔ ITree target (finite simulation).
 
     We prove refinements where the source uses the Imp (direct) STS
     and the target uses the ITree-based STS. This demonstrates that
