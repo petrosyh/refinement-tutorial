@@ -855,15 +855,10 @@ Proof.
             exfalso; eapply U; econs end. }
     + solve_undef_expr. intros n Hae. eapply UNDEF. eapply ES_MemStore; eauto.
   - (* CExternal x name args *)
-    (* ES_External is observable. Use sim_obs (econs 2).
-       Inside the callback, get the target's Forall2 and use
-       HS_observe_catch_up to match — source silently evaluates
-       expressions (picking the same nondeterministic values as target),
-       then takes the observable Observe step. *)
-    (* CExternal requires sim_obs, but the source's Handled_sort after
-       handle_mem is hard to prove normal. Added HS_observe_catch_up
-       to Handled_step to handle the nondeterminism (source picks same
-       Choose values as target's aeval). Full proof left as future work. *)
+    (* Forward simulation can't directly handle CExternal because ES_External
+       is observable but source needs silent steps (expression evaluation) first.
+       Source and target have the same nondeterminism (AAny ↔ Choose).
+       A catch-up or backward simulation would close this case. *)
     admit.
 Admitted.
 
