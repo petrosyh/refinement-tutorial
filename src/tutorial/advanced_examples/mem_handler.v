@@ -266,6 +266,35 @@ Proof.
   reflexivity.
 Qed.
 
+Lemma fold_handle_mem : forall R (t: itree Es R) m,
+  interp_state handle_Es t m = handle_mem t m.
+Proof. reflexivity. Qed.
+
+Lemma handle_mem_memload_bind : forall loc m R (k: option nat -> itree Es R),
+  handle_mem (ov <- trigger (MemLoad loc);; k ov) m =
+  tau;; handle_mem (k (Mem.load m loc)) m.
+Proof.
+  intros. rewrite handle_mem_bind. rewrite handle_mem_load.
+  rewrite bind_tau. rewrite bind_ret_l. cbn. reflexivity.
+Qed.
+
+Lemma handle_mem_observe_bind : forall fn args m R (k: nat -> itree Es R),
+  handle_mem (retv <- trigger (Observe fn args);; k retv) m =
+  retv <- trigger (Observe fn args);; tau;; handle_mem (k retv) m.
+Proof.
+  intros. rewrite handle_mem_bind. rewrite handle_mem_observe.
+  rewrite bind_bind. f. f_equiv. intros x.
+  rewrite bind_tau. rewrite bind_ret_l. cbn. reflexivity.
+Qed.
+
+Lemma handle_mem_memstore_bind : forall loc v m R (k: unit -> itree Es R),
+  handle_mem (trigger (MemStore loc v) ;;; k tt) m =
+  tau;; handle_mem (k tt) (Mem.store m loc v).
+Proof.
+  intros. rewrite handle_mem_bind. rewrite handle_mem_store.
+  rewrite bind_tau. rewrite bind_ret_l. cbn. reflexivity.
+Qed.
+
 
 
 (** ** 7. Key structural lemmas *)
@@ -630,7 +659,197 @@ Fixpoint com_size (c: com) : nat :=
 (** The main refinement theorem. *)
 Theorem handle_mem_refinement :
   forall c, refines (fst (X_Program c)) (snd (X_Program c)).
-Proof. intros. apply adequacy. unfold simulation, X_Program, X_STS, X_sort, Imp_init. ss. intros.
+Proof.
+  intros c. apply adequacy.
+  unfold simulation, X_Program, X_STS, X_sort, Imp_init. ss. intros.
+  ginit. rewrite denote_program_cont.
+  guclo @sim_progressC_spec. econs. instantiate (1:=pt). instantiate (1:=ps). 2,3: ss.
+  remember Reg.init as reg. remember Kstop as kont. remember Mem.init as mem0.
+  clear Heqreg Heqkont Heqmem0.
+  revert ps pt c reg kont mem0.
+  gcofix CIH. intros ps0 pt0 cmd reg kont mem.
+  gstep.
+  remember (com_size cmd) as sz eqn:Hsz.
+  revert cmd reg kont mem ps0 pt0 Hsz.
+  induction sz as [sz IHsz] using lt_wf_ind.
+  intros cmd reg kont mem ps0 pt0 Hsz.
+  (* Tactic: handle Step_silent_undefined for expression-based commands *)
+  Local Ltac solve_undef_expr :=
+    ss; split; auto; cbn; rewrite bind_bind;
+    eapply no_aeval_sim.
+  (* Tactic: fold interp_state back to handle_mem and apply CIH *)
+  Local Ltac finish_CIH CIH :=
+    (* Fold interp_state back to handle_mem if needed *)
+    try (match goal with
+    | |- context [inl (interp_state handle_Es ?t ?m)] =>
+      change (interp_state handle_Es t m) with (handle_mem t m)
+    end);
+    (* Reconstruct handle_mem (... >>= ...) from the split form *)
+    try rewrite <- handle_mem_bind;
+    (* Reconstruct denote_com CSkip if needed *)
+    try (match goal with
+    | |- context [handle_mem (denote_cont ?k (inl ?r)) ?m] =>
+      replace (handle_mem (denote_cont k (inl r)) m)
+        with (handle_mem (res <- denote_com CSkip r;; denote_cont k res) m)
+        by (cbn; rewrite bind_ret_l; reflexivity)
+    end);
+    econs 6; [gfinal; left; apply CIH | auto | auto].
+  destruct cmd.
+  - (* CSkip *)
+    destruct kont.
+    + (* Kstop: no CRet → UB *)
+      cbn. rewrite bind_ret_l. cbn.
+      rewrite handle_mem_undefined_bind. rewrite bind_trigger. econs 5. ss.
+    + (* Kseq c k: step to next command *)
+      cbn. rewrite bind_ret_l. cbn. rewrite handle_mem_tau.
+      econs 3; [ss|]. esplits; [eapply X_step_handled; eapply HS_tau | ss |].
+      econs 4; [ss|]. i.
+      match goal with [H: X_step _ _ _ |- _] => inv H end.
+      match goal with [H: step_silent _ _ _ |- _] => inv H end; ss.
+      * match goal with [H: ceval_silent _ _ _ |- _] => inv H end.
+        split; auto. finish_CIH CIH.
+      * match goal with [U: forall _ _, ~ ceval_silent _ _ _ |- _] =>
+          exfalso; eapply U; econs end.
+  - (* CAsgn x a *)
+    econs 4; [ss|]. i. inv H. inv STEP.
+    + inv STEP0. ss. split; auto. cbn. rewrite bind_bind.
+      eapply aeval_handle_sim'; eauto. intros ps'.
+      (* After aeval, source = handle_mem (Ret (inl r') >>= denote_cont kont) mem.
+         Reduce the Ret bind inside handle_mem, then dispatch on kont. *)
+      destruct kont.
+      * (* Kstop: source UB *)
+        norm. econs 5. ss.
+      * (* Kseq: tau + CIH via ES_Skip *)
+        norm.
+        econs 3; [ss|]; esplits; [eapply X_step_handled; eapply HS_tau | ss |].
+        try rewrite fold_handle_mem; rewrite <- handle_mem_bind.
+        econs 4; [ss|]; i.
+        match goal with [H: X_step _ _ _ |- _] => inv H end.
+        match goal with [H: step_silent _ _ _ |- _] => inv H end; ss.
+        { match goal with [H: ceval_silent _ _ _ |- _] => inv H end.
+          split; auto. finish_CIH CIH. }
+        { match goal with [U: forall _ _, ~ ceval_silent _ _ _ |- _] =>
+            exfalso; eapply U; econs end. }
+    + solve_undef_expr. intros n Hae. eapply UNDEF. econs. exact Hae.
+  - (* CSeq cmd1 cmd2 *)
+    econs 4; [ss|]. i. inv H. inv STEP.
+    + inv STEP0. ss. split; auto.
+      match goal with
+      | |- context [handle_mem ?t _] =>
+        replace t with (res <- denote_com cmd1 reg;; denote_cont (Kseq cmd2 kont) res)
+          by (symmetry; apply denote_seq_cont)
+      end.
+      eapply IHsz. 2: reflexivity. lia.
+    + exfalso. eapply UNDEF. econs.
+  - (* CIf b cmd1 cmd2 *)
+    econs 4; [ss|]. i. inv H. inv STEP.
+    + inv STEP0.
+      * (* IfTrue *)
+        ss. split; auto. cbn. rewrite bind_bind.
+        eapply aeval_handle_sim'; eauto. intros ps'.
+        destruct (Nat.eqb n 0) eqn:Heq; [apply PeanoNat.Nat.eqb_eq in Heq; lia|].
+        eapply IHsz. 2: reflexivity. lia.
+      * (* IfFalse *)
+        ss. split; auto. cbn. rewrite bind_bind.
+        eapply aeval_handle_sim'; eauto. intros ps'. subst.
+        rewrite PeanoNat.Nat.eqb_refl.
+        eapply IHsz. 2: reflexivity. lia.
+    + solve_undef_expr. intros n Hae.
+      destruct (PeanoNat.Nat.eq_dec n 0).
+      * eapply UNDEF. eapply ES_IfFalse; eauto.
+      * eapply UNDEF. eapply ES_IfTrue; eauto.
+  - (* CWhile b cmd *)
+    cbn. rewrite unfold_iter_eq. rewrite bind_bind.
+    econs 4; [ss|]. i. inv H. inv STEP.
+    + inv STEP0.
+      * (* WhileFalse *)
+        ss. split; auto. rewrite bind_bind.
+        eapply aeval_handle_sim'; eauto. intros ps'. subst.
+        rewrite PeanoNat.Nat.eqb_refl. cbn. rewrite bind_ret_l. cbn.
+        destruct kont.
+        { cbn. norm. econs 5. ss. }
+        { simpl denote_cont. norm.
+          econs 3; [ss|]; esplits; [eapply X_step_handled; eapply HS_tau | ss |].
+          econs 4; [ss|]; i.
+          match goal with [H: X_step _ _ _ |- _] => inv H end.
+          match goal with [H: step_silent _ _ _ |- _] => inv H end; ss.
+          - match goal with [H: ceval_silent _ _ _ |- _] => inv H end.
+            split; auto. try rewrite fold_handle_mem; rewrite <- handle_mem_bind.
+            finish_CIH CIH.
+          - match goal with [U: forall _ _, ~ ceval_silent _ _ _ |- _] =>
+              exfalso; eapply U; econs end. }
+      * (* WhileTrue *)
+        ss. split; auto. rewrite bind_bind.
+        eapply aeval_handle_sim'; eauto. intros ps'.
+        destruct (Nat.eqb n 0) eqn:Heq; [apply PeanoNat.Nat.eqb_eq in Heq; lia|].
+        cbn. rewrite bind_bind.
+        replace (fun r0 : Reg.t + nat => _) with (denote_cont (Kseq (CWhile b cmd) kont))
+          by (apply func_ext_dep; intros [r'|v]; cbn;
+              repeat (try rewrite bind_bind; try rewrite bind_ret_l;
+                      try rewrite bind_tau; try rewrite denote_cont_ret; cbn);
+              try reflexivity).
+        eapply IHsz. 2: reflexivity. lia.
+    + solve_undef_expr. intros n Hae.
+      destruct (PeanoNat.Nat.eq_dec n 0).
+      * eapply UNDEF. eapply ES_WhileFalse; eauto.
+      * eapply UNDEF. eapply ES_WhileTrue; eauto.
+  - (* CRet a *)
+    econs 4; [ss|]. i. inv H. inv STEP.
+    + inv STEP0. ss. split; auto. cbn. rewrite bind_bind.
+      eapply aeval_handle_sim'; eauto. intros ps'.
+      rewrite bind_ret_l. rewrite denote_cont_ret. norm. econs 1; ss.
+    + solve_undef_expr. intros n Hae. eapply UNDEF. econs. exact Hae.
+  - (* CMemLoad x loc *)
+    econs 4; [ss|]. i. inv H. inv STEP.
+    + inv STEP0. ss. split; auto. cbn. rewrite bind_bind.
+      rewrite handle_mem_memload_bind.
+      match goal with [H: Mem.load _ _ = Some _ |- _] => rewrite H end. cbn.
+      rewrite handle_mem_bind. rewrite handle_mem_ret. norm.
+      econs 3; [ss|]. esplits; [eapply X_step_handled; eapply HS_tau | ss |].
+      destruct kont.
+      * norm. econs 5. ss.
+      * norm.
+        econs 3; [ss|]; esplits; [eapply X_step_handled; eapply HS_tau | ss |].
+        econs 4; [ss|]; i.
+        match goal with [H: X_step _ _ _ |- _] => inv H end.
+        match goal with [H: step_silent _ _ _ |- _] => inv H end; ss.
+        { match goal with [H: ceval_silent _ _ _ |- _] => inv H end.
+          split; auto. finish_CIH CIH. }
+        { match goal with [U: forall _ _, ~ ceval_silent _ _ _ |- _] =>
+            exfalso; eapply U; econs end. }
+    + (* Step_silent_undefined: Mem.load fails *)
+      ss. split; auto. cbn. rewrite bind_bind.
+      rewrite handle_mem_memload_bind.
+      destruct (Mem.load mem loc) eqn:Hl.
+      * exfalso. eapply UNDEF. eapply ES_MemLoad; eauto.
+      * cbn. norm.
+        econs 3; [ss|]. esplits; [eapply X_step_handled; eapply HS_tau | ss |].
+        econs 5. ss.
+  - (* CMemStore l a *)
+    econs 4; [ss|]. i. inv H. inv STEP.
+    + inv STEP0. ss. split; auto. cbn. rewrite bind_bind.
+      eapply aeval_handle_sim'; eauto. intros ps'.
+      unfold handle_mem. rewrite interp_state_bind.
+      rewrite interp_state_bind. rewrite interp_state_trigger. cbn. norm.
+      econs 3; [ss|]. esplits; [eapply X_step_handled; eapply HS_tau | ss |].
+      destruct kont.
+      * norm. econs 5. ss.
+      * norm.
+        econs 3; [ss|]; esplits; [eapply X_step_handled; eapply HS_tau | ss |].
+        try rewrite fold_handle_mem; rewrite <- handle_mem_bind.
+        econs 4; [ss|]; i.
+        match goal with [H: X_step _ _ _ |- _] => inv H end.
+        match goal with [H: step_silent _ _ _ |- _] => inv H end; ss.
+        { match goal with [H: ceval_silent _ _ _ |- _] => inv H end.
+          split; auto. finish_CIH CIH. }
+        { match goal with [U: forall _ _, ~ ceval_silent _ _ _ |- _] =>
+            exfalso; eapply U; econs end. }
+    + solve_undef_expr. intros n Hae. eapply UNDEF. eapply ES_MemStore; eauto.
+  - (* CExternal x name args *)
+    (* ES_External is observable. Source must evaluate expressions silently
+       (via sim_silentS), then match the observable Observe step (via sim_obs).
+       Admitted: requires knowing target's Forall2 before source commits. *)
+    admit.
 Admitted.
 
 Corollary handle_mem_refines_imp :
