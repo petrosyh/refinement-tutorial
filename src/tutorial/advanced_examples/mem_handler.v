@@ -3,7 +3,7 @@ From Paco Require Import paco.
 From Tutorial Require Import Refinement ITreeLib.
 From Stdlib Require Import Strings.String List.
 From Tutorial Require Import Imp ITreeLang Simulation.
-From Stdlib Require Import Logic.Eqdep Lia Arith.Wf_nat.
+From Stdlib Require Import Logic.Eqdep Lia Arith.Wf_nat Logic.Classical.
 
 Set Implicit Arguments.
 
@@ -580,6 +580,30 @@ Qed.
     - Source: [handle_mem (res <- denote_com c r;; denote_cont k res) m]
     - Target: [(m, Normal r c k)] *)
 
+(** Helper: if no [aeval] holds, then handle_mem of the expression
+    reaches UB on the source side. *)
+Lemma no_aeval_sim :
+  forall a reg, (forall n, ~ aeval reg a n) ->
+  forall sim_r m (k: nat -> itree Es nat) ps pt,
+    @_sim _ ekind_external _ X_step X_sort sim_r ps pt
+      (inl (handle_mem (v <- denote_aexp a reg;; k v) m))
+      (inr (m, Undef)).
+Proof.
+  induction a; intros reg NOEVAL sim_r m k ps pt.
+  - exfalso. eapply (NOEVAL 0). econs.
+  - exfalso. eapply (NOEVAL n). econs.
+  - cbn. destruct (Reg.read reg x) eqn:Hx.
+    + exfalso. eapply (NOEVAL n). econs. unfold Reg.read in Hx. auto.
+    + norm. econs 5. ss.
+  - cbn. rewrite bind_bind.
+    destruct (classic (exists n1, aeval reg a1 n1)) as [[n1 Hae1] | Hnae1].
+    + eapply aeval_handle_sim'. exact Hae1. intros ps'.
+      rewrite bind_bind.
+      eapply IHa2. intros n2 Hae2.
+      eapply (NOEVAL (bin_op_eval op n1 n2)). econs; eauto.
+    + eapply IHa1. intros n1 Hae1. apply Hnae1. eauto.
+Qed.
+
 Local Notation sim := (@sim _ ekind_external _ X_step X_sort).
 Local Notation _sim := (@_sim _ ekind_external _ X_step X_sort).
 
@@ -606,11 +630,8 @@ Fixpoint com_size (c: com) : nat :=
 (** The main refinement theorem. *)
 Theorem handle_mem_refinement :
   forall c, refines (fst (X_Program c)) (snd (X_Program c)).
-Proof.
-  intros c. apply adequacy.
-  unfold simulation, X_Program, X_STS, X_sort, Imp_init. ss. intros.
+Proof. intros. apply adequacy. unfold simulation, X_Program, X_STS, X_sort, Imp_init. ss. intros.
 Admitted.
-
 
 Corollary handle_mem_refines_imp :
   forall c,
