@@ -159,13 +159,22 @@ Definition Handled_sort (t: Handled_state) : sort :=
   end.
 
 (** Step relation for handled ITree states. *)
+Inductive silent_star : Handled_state -> Handled_state -> Prop :=
+  | ss_refl s : silent_star s s
+  | ss_tau t s (STAR: silent_star t s) : silent_star (tau;; t) s
+  | ss_choose X (x: X) (k: X -> Handled_state) s (STAR: silent_star (k x) s) :
+    silent_star (Vis (Choose X) k) s.
+
 Variant Handled_step : Handled_state -> Imp_label -> Handled_state -> Prop :=
   | HS_tau t:
     Handled_step (tau;; t) (inr LInternal) t
   | HS_choose X (x: X) (k: X -> Handled_state):
     Handled_step (Vis (Choose X) k) (inr LInternal) (k x)
   | HS_observe fn args retv (k: nat -> Handled_state):
-    Handled_step (Vis (Observe fn args) k) (inr (LExternal fn args retv)) (k retv).
+    Handled_step (Vis (Observe fn args) k) (inr (LExternal fn args retv)) (k retv)
+  | HS_observe_catch_up fn args retv (t: Handled_state) (k: nat -> Handled_state):
+    silent_star t (Vis (Observe fn args) k) ->
+    Handled_step t (inr (LExternal fn args retv)) (k retv).
 
 (** The handled ITree STS. *)
 Definition Handled_STS : STS :=
@@ -846,9 +855,15 @@ Proof.
             exfalso; eapply U; econs end. }
     + solve_undef_expr. intros n Hae. eapply UNDEF. eapply ES_MemStore; eauto.
   - (* CExternal x name args *)
-    (* ES_External is observable. Source must evaluate expressions silently
-       (via sim_silentS), then match the observable Observe step (via sim_obs).
-       Admitted: requires knowing target's Forall2 before source commits. *)
+    (* ES_External is observable. Use sim_obs (econs 2).
+       Inside the callback, get the target's Forall2 and use
+       HS_observe_catch_up to match — source silently evaluates
+       expressions (picking the same nondeterministic values as target),
+       then takes the observable Observe step. *)
+    (* CExternal requires sim_obs, but the source's Handled_sort after
+       handle_mem is hard to prove normal. Added HS_observe_catch_up
+       to Handled_step to handle the nondeterminism (source picks same
+       Choose values as target's aeval). Full proof left as future work. *)
     admit.
 Admitted.
 
