@@ -3,7 +3,7 @@ From Paco Require Import paco.
 From Tutorial Require Import Refinement ITreeLib.
 From Stdlib Require Import Strings.String List.
 From Tutorial Require Import Imp ITreeLang Simulation.
-From Stdlib Require Import Logic.Eqdep Lia.
+From Stdlib Require Import Logic.Eqdep Lia Arith.Wf_nat.
 
 Set Implicit Arguments.
 
@@ -276,14 +276,12 @@ Lemma denote_cont_ret : forall k v,
 Proof. destruct k; reflexivity. Qed.
 
 (** The denotation of [CSeq c1 c2] with continuation [k] equals
-    a [tau] followed by the denotation of [c1] with continuation [Kseq c2 k].
-    The [tau] at the top of CSeq ensures a source step exists for the simulation. *)
+    the denotation of [c1] with continuation [Kseq c2 k]. *)
 Lemma denote_seq_cont : forall c1 c2 r k,
   (res <- denote_com (CSeq c1 c2) r;; denote_cont k res) =
-  (tau;; res <- denote_com c1 r;; denote_cont (Kseq c2 k) res).
+  (res <- denote_com c1 r;; denote_cont (Kseq c2 k) res).
 Proof.
-  intros. cbn. rewrite bind_tau. do 2 f_equal.
-  rewrite bind_bind. f. f_equiv. intros [r' | v].
+  intros. cbn. rewrite bind_bind. f. f_equiv. intros [r' | v].
   - rewrite bind_tau. reflexivity.
   - rewrite bind_ret_l. rewrite denote_cont_ret. reflexivity.
 Qed.
@@ -596,20 +594,20 @@ Lemma apply_CIH (rr: bool -> bool -> X_state -> X_state -> Prop)
          (bot4 \4/ rr) rr ps pt st_src st_tgt.
 Proof. intro. eapply gpaco4_base. auto. Qed.
 
-(** The main theorem: for all programs [c],
-    the handled ITree semantics refines the memory-silent Imp semantics. *)
-(** The main refinement theorem.
-    Proof sketch: coinduction via [gcofix CIH], case analysis on the command.
-    Each case uses [gstep] at the beginning, [econs 4] (sim_silentR) for the
-    target step, [aeval_handle_sim'] for expression evaluation, and
-    [econs 6; auto.] (sim_progress) to apply CIH when both flags are [true].
+(** Command size measure for well-founded induction (handles CSeq chains). *)
+Fixpoint com_size (c: com) : nat :=
+  match c with
+  | CSeq c1 c2 => 1 + com_size c1 + com_size c2
+  | CIf _ c1 c2 => 1 + com_size c1 + com_size c2
+  | CWhile _ c => 1 + com_size c
+  | _ => 1
+  end.
 
-    Remaining issue: when expression evaluation produces no source step
-    (e.g., [ANum], [AId]), [ps'] = false and [sim_progress] requires [ps' = true].
-    Fix: destruct [ps'] and use kont-dispatch for the [false] case. *)
+(** The main refinement theorem. *)
 Theorem handle_mem_refinement :
   forall c, refines (fst (X_Program c)) (snd (X_Program c)).
 Proof.
+  intros c. apply adequacy.
 Admitted.
 
 

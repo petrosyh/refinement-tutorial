@@ -72,7 +72,6 @@ Fixpoint denote_com (c: com) (r: Reg.t) : itree Es (Reg.t + nat) :=
       v <- denote_aexp a r;;
       Ret (inl (Reg.write r x v))
   | CSeq c1 c2 =>
-      tau;;
       res <- denote_com c1 r;;
       match res with
       | inl r' => tau;; denote_com c2 r'
