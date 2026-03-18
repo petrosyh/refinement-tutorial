@@ -608,6 +608,7 @@ Theorem handle_mem_refinement :
   forall c, refines (fst (X_Program c)) (snd (X_Program c)).
 Proof.
   intros c. apply adequacy.
+  unfold simulation, X_Program, X_STS, X_sort, Imp_init. ss. intros.
 Admitted.
 
 
