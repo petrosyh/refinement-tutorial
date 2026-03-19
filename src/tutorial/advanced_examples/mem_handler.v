@@ -642,6 +642,23 @@ Proof.
     + eapply IHa1. intros n1 Hae1. apply Hnae1. eauto.
 Qed.
 
+Lemma no_aeval_list_sim :
+  forall es reg, (~ exists vs, Forall2 (aeval reg) es vs) ->
+  forall sim_r m (k: list nat -> itree Es nat) ps pt,
+    @_sim _ ekind_external _ X_step X_sort sim_r ps pt
+      (inl (handle_mem (vs <- denote_aexps es reg;; k vs) m))
+      (inr (m, Undef)).
+Proof.
+  induction es; intros reg NOEVAL sim_r m k ps pt.
+  - exfalso. apply NOEVAL. exists nil. econs.
+  - cbn. rewrite bind_bind.
+    destruct (classic (exists n, aeval reg a n)) as [[n Hae] | Hnae].
+    + eapply aeval_handle_sim'. exact Hae. intros ps'.
+      rewrite bind_bind.
+      eapply IHes. intros [vs Hvs]. apply NOEVAL. exists (n :: vs). econs; eauto.
+    + eapply no_aeval_sim. intros n Hae. apply Hnae. eauto.
+Qed.
+
 Local Notation sim := (@sim _ ekind_external _ X_step X_sort).
 Local Notation _sim := (@_sim _ ekind_external _ X_step X_sort).
 
@@ -980,30 +997,36 @@ Proof.
             exfalso; eapply U; econs end. }
     + solve_undef_expr. intros n Hae. eapply UNDEF. eapply ES_MemStore; eauto.
   - (* CExternal x name args *)
+    (* Use sim_silentS to step source through expression evaluation,
+       then sim_obs for the observable Observe step.
+       For the non-evaluable case, target goes to Undef. *)
     destruct (classic (exists vargs, Forall2 (aeval reg) args vargs)) as [[vargs Hf] | Hnf].
-    + (* Args evaluable: use sim_catchupC *)
+    + (* Args evaluable: use sim_obs with HS_observe_catch_up *)
       econs 2.
       { eapply handle_mem_ext_sort_normal; eauto. }
       { ss. }
       intros ev st_tgt1 HSTEP. inv HSTEP. inv STEP.
       * inv STEP0. ss. split; auto.
         esplits.
-        { eapply X_step_handled. eapply HS_observe_catch_up.
+        { (* Use HS_observe_catch_up: silent_star to Vis (Observe name vargs0) then observe *)
+          eapply X_step_handled. eapply HS_observe_catch_up.
           cbn [denote_com]. rewrite !bind_bind.
           eapply silent_star_trans.
-          { eapply aeval_list_silent_star; eauto. }
-          (* Source is at handle_mem (retv <- trigger (Observe ...) >>= ... >>= denote_cont kont) m.
-             Need to show this reduces to Vis (Observe name vargs0) k. *)
-          unfold handle_mem. ired.
-          admit. }
-        (* Continuation after observe: tau + CIH *)
-        admit.
+          { eapply aeval_list_silent_star. eauto. }
+          cbn. rewrite bind_bind. rewrite handle_mem_observe_bind.
+          rewrite bind_trigger. eapply ss_refl. }
+        (* Continuation after observe: source has tau;; handle_mem (...) mem *)
+        norm.
+        econs 3; [ss|]. esplits; [eapply X_step_handled; eapply HS_tau | ss |].
+        norm. finish_CIH CIH.
       * exfalso. eapply UNDEF. eapply ES_External. exact Hf.
-    + (* Args not evaluable: target goes to Undef *)
+    + (* Args not evaluable: target goes to Undef via Step_silent_undefined *)
       econs 4; [ss|]. i. inv H. inv STEP.
-      * inversion_clear STEP0. exfalso. apply Hnf. eauto.
-      * ss. split; auto. admit.
-Admitted.
+      * inv STEP0. exfalso. apply Hnf. eauto.
+      * ss. split; auto. cbn [denote_com]. rewrite !bind_bind.
+        eapply no_aeval_list_sim. exact Hnf.
+  Unshelve. all: exact 0.
+Qed.
 
 Corollary handle_mem_refines_imp :
   forall c,
