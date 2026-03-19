@@ -665,6 +665,131 @@ Fixpoint com_size (c: com) : nat :=
   | _ => 1
   end.
 
+(** ** 9. Catch-up observation closure *)
+
+(** [silent_star] implies a chain of [Handled_step] with silent labels. *)
+Lemma silent_star_trans : forall s1 s2 s3,
+  silent_star s1 s2 -> silent_star s2 s3 -> silent_star s1 s3.
+Proof. induction 1; intros; eauto using ss_tau, ss_choose. Qed.
+
+Lemma silent_star_sort_normal : forall s1 s2,
+  silent_star s1 s2 -> Handled_sort s2 = normal -> Handled_sort s1 = normal.
+Proof. induction 1; ss. Qed.
+
+Lemma silent_star_sort_normal_obs : forall s fn args k,
+  silent_star s (Vis (Observe fn args) k) -> Handled_sort s = normal.
+Proof. intros. eapply silent_star_sort_normal; eauto. Qed.
+
+(** Catch-up observation: a compatible closure that allows source to
+    take silent steps before matching an observable target step.
+    The key: the silent steps are INSIDE the [forall ev st_tgt1] callback,
+    so we see the target's label before choosing source's path. *)
+Variant sim_catchupC
+        (sim: bool -> bool -> X_state -> X_state -> Prop)
+  : bool -> bool -> X_state -> X_state -> Prop :=
+  | sim_catchupC_intro ps pt (src_h: Handled_state) st_tgt
+      (SORT_S: X_sort (inl src_h) = normal)
+      (SORT_T: X_sort st_tgt = normal)
+      (SIM: forall ev st_tgt1,
+          X_step st_tgt ev st_tgt1 ->
+          (ekind_external ev = observableE) /\
+          exists fn args retv (k: nat -> Handled_state),
+            ev = inr (LExternal fn args retv) /\
+            silent_star src_h (Vis (Observe fn args) k) /\
+            sim true true (inl (k retv)) st_tgt1)
+    : sim_catchupC sim ps pt (inl src_h) st_tgt.
+
+Lemma sim_catchupC_mon: monotone4 sim_catchupC.
+Proof.
+  ii. inv IN. econs; eauto. i. exploit SIM; eauto. i. des. subst. esplits; eauto.
+Qed.
+
+#[local] Hint Resolve sim_catchupC_mon: paco.
+
+(** The closure is wrespectful — each silent step becomes [sim_silentS],
+    the final observable step becomes [sim_obs]. *)
+Lemma sim_catchupC_wrespectful: wrespectful4 _sim sim_catchupC.
+Proof.
+  econs; eauto with paco.
+  i. inv PR.
+  econs 2; eauto.
+  i. exploit SIM; eauto. i. des. subst. splits; auto.
+  esplits.
+  { eapply X_step_handled. eapply HS_observe_catch_up. eauto. }
+  apply GF in x6. eapply Simulation.sim_mon; eauto.
+  i. eapply rclo4_base. auto.
+Qed.
+
+Lemma sim_catchupC_spec: sim_catchupC <5= gupaco4 _sim (cpn4 _sim).
+Proof.
+  i. eapply wrespect4_uclo; eauto with paco. eapply sim_catchupC_wrespectful.
+Qed.
+
+(** Helper: [aeval] implies a [silent_star] for the handled source ITree.
+    Given [aeval reg a n], the handled ITree [handle_mem (denote_aexp a reg >>= k) m]
+    can silently reach [handle_mem (k n) m]. *)
+Lemma aeval_silent_star :
+  forall a reg n, aeval reg a n ->
+  forall m (k: nat -> itree Es nat),
+    silent_star (handle_mem (v <- denote_aexp a reg;; k v) m)
+               (handle_mem (k n) m).
+Proof.
+  induction 1; intros m k0.
+  - (* AAny *)
+    cbn. rewrite handle_mem_choose_bind. rewrite bind_trigger.
+    eapply ss_choose. eapply ss_tau. econs.
+  - (* ANum *)
+    cbn. rewrite bind_ret_l. econs.
+  - (* AId *)
+    cbn. unfold Reg.read.
+    match goal with [H: _ _ = Some _ |- _] => rewrite H end.
+    rewrite bind_ret_l. econs.
+  - (* ABinOp *)
+    cbn. rewrite bind_bind.
+    eapply silent_star_trans.
+    { eapply IHaeval1. }
+    cbn. rewrite bind_bind.
+    match goal with
+    | |- context [handle_mem ?t _] =>
+        replace t with (v2 <- denote_aexp a2 r;; k0 (bin_op_eval op n1 v2));
+        [| f; f_equiv; intros v2; rewrite bind_ret_l; reflexivity]
+    end.
+    eapply IHaeval2.
+Qed.
+
+(** Helper for expression lists. *)
+Lemma aeval_list_silent_star :
+  forall es reg vs, Forall2 (aeval reg) es vs ->
+  forall m (k: list nat -> itree Es nat),
+    silent_star (handle_mem (vargs <- denote_aexps es reg;; k vargs) m)
+               (handle_mem (k vs) m).
+Proof.
+  induction 1; intros m k0.
+  - cbn. rewrite bind_ret_l. econs.
+  - cbn. rewrite bind_bind.
+    eapply silent_star_trans.
+    { eapply aeval_silent_star. eauto. }
+    replace (handle_mem _ m)
+      with (handle_mem (vs <- denote_aexps l reg;; k0 (y :: vs)) m).
+    2:{ unfold handle_mem. grind. }
+    eapply IHForall2.
+Qed.
+
+(** Sort helper: if args are evaluable, source sort is normal. *)
+Lemma handle_mem_ext_sort_normal :
+  forall args reg name x kont mem vargs,
+    Forall2 (aeval reg) args vargs ->
+    Handled_sort (handle_mem (res <- denote_com (CExternal x name args) reg;; denote_cont kont res) mem) = normal.
+Proof.
+  intros.
+  eapply silent_star_sort_normal.
+  { cbn [denote_com]. rewrite !bind_bind.
+    eapply silent_star_trans.
+    { eapply aeval_list_silent_star. eauto. }
+    econs. }
+  ss.
+Qed.
+
 (** The main refinement theorem. *)
 Theorem handle_mem_refinement :
   forall c, refines (fst (X_Program c)) (snd (X_Program c)).
@@ -855,11 +980,29 @@ Proof.
             exfalso; eapply U; econs end. }
     + solve_undef_expr. intros n Hae. eapply UNDEF. eapply ES_MemStore; eauto.
   - (* CExternal x name args *)
-    (* Forward simulation can't directly handle CExternal because ES_External
-       is observable but source needs silent steps (expression evaluation) first.
-       Source and target have the same nondeterminism (AAny ↔ Choose).
-       A catch-up or backward simulation would close this case. *)
-    admit.
+    destruct (classic (exists vargs, Forall2 (aeval reg) args vargs)) as [[vargs Hf] | Hnf].
+    + (* Args evaluable: use sim_catchupC *)
+      econs 2.
+      { eapply handle_mem_ext_sort_normal; eauto. }
+      { ss. }
+      intros ev st_tgt1 HSTEP. inv HSTEP. inv STEP.
+      * inv STEP0. ss. split; auto.
+        esplits.
+        { eapply X_step_handled. eapply HS_observe_catch_up.
+          cbn [denote_com]. rewrite !bind_bind.
+          eapply silent_star_trans.
+          { eapply aeval_list_silent_star; eauto. }
+          (* Source is at handle_mem (retv <- trigger (Observe ...) >>= ... >>= denote_cont kont) m.
+             Need to show this reduces to Vis (Observe name vargs0) k. *)
+          unfold handle_mem. ired.
+          admit. }
+        (* Continuation after observe: tau + CIH *)
+        admit.
+      * exfalso. eapply UNDEF. eapply ES_External. exact Hf.
+    + (* Args not evaluable: target goes to Undef *)
+      econs 4; [ss|]. i. inv H. inv STEP.
+      * inversion_clear STEP0. exfalso. apply Hnf. eauto.
+      * ss. split; auto. admit.
 Admitted.
 
 Corollary handle_mem_refines_imp :
